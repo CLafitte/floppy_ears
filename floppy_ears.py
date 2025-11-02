@@ -47,11 +47,22 @@ def amplitude_compensation(audio, sr):
     gain[(freqs >= 12000) & (freqs <= 16000)] *= 1.3
     return irfft(spectrum * gain).astype(np.float64)
 
-def transient_enhancement(audio, window_size=1024, boost=0.5):
-    """Enhance transients to mimic dogs' acute temporal sensitivity."""
-    envelope = np.convolve(np.abs(audio), np.ones(window_size)/window_size, mode='same')
-    audio = audio * (1 + boost * (envelope / np.max(envelope)))
-    return audio.astype(np.float64)
+def transient_enhancement(audio, sr, boost=0.5, time_constant_ms=10):
+    """Enhance transients using an exponential envelope follower.
+    This version replaces the moving-average convolution with a fast,
+    low-overhead smoothing that reacts quickly to onsets.
+    """
+    coeff = np.exp(-1.0 / (time_constant_ms * 0.001 * sr))
+    env = 0.0
+    out = np.zeros_like(audio)
+    max_env = 1e-9  # prevent division by zero
+
+    for i, x in enumerate(audio):
+        env = coeff * env + (1 - coeff) * abs(x)
+        max_env = max(max_env, env)
+        out[i] = x * (1 + boost * env / max_env)
+
+    return out.astype(np.float64)
 
 # -------------------- New Soft Upward Expansion -------------------- #
 
