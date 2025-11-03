@@ -1,0 +1,96 @@
+Floppy Ears – DSP Pipeline Design Notes
+---------------------------------------
+
+floppy_ears.py is a Python-based digital signal processing tool that transforms a WAV
+file to approximate canine hearing perception within the human hearing range.
+
+This tool assumes input from a consumer microphone capturing the ~20Hz - 20kHz range; 
+these mics don't capture the full canine hearing spectrum (~40 Hz to 65,000 Hz). To 
+accommodate, this pipeline aims to mimic dogs' sensitivity to high frequencies and 
+low-level signals within human hearing range. The pipeline emphasizes high-frequency 
+content (~4–16 kHz) and boosts quiet sounds using soft upward expansion to mimic 
+dogs’ greater sensitivity to high frequencies and low-level signals. It also enhances 
+transients and optionally shifts pitch slightly upward, reflecting dogs’ faster temporal 
+resolution and extended hearing range within the limits of typical microphones.
+
+Some notes on DSP:   
+The processing order emphasizes dynamic stability early in the chain, followed by 
+spectral enhancement and optional tonal shaping.  
+
+- The transient stage operates first to normalize attack energy, providing a controlled
+  input for subsequent stages.
+- Optional upward expansion (soft compression) boosts low-level high-frequency content
+  without introducing harshness.
+- Frequency shaping and amplitude compensation follow, emphasizing bands relevant
+  to canine auditory sensitivity.
+- Soft limiting ensures consistent peak levels and prevents clipping.
+
+This order minimizes cumulative artifacts and keeps processing modular for experimentation
+and future iteration.
+
+------------------------------------------------------------
+Current Stages (v0.2)
+------------------------------------------------------------
+
+1. Transient Management
+   - Replaces prior convolution-based enhancement.
+   - Uses exponential envelope follower to smooth fast onsets.
+   - Maintains natural dynamics while emphasizing temporal detail.
+
+2. Soft Upward Expansion (optional)
+   - Two-band split: high-frequency content (>4 kHz) processed separately.
+   - Exponential envelope follower with attack/release smoothing.
+   - Boosts quiet high-frequency sounds for improved audibility.
+
+3. Frequency Shaping
+   - FIR band-pass filter (4–16 kHz) via scipy.firwin().
+   - Linear-phase response preserves timing.
+   - Emphasizes high-band energy where canine hearing is most sensitive.
+
+4. Amplitude Compensation
+   - FFT-domain spectral gain:
+       4–8 kHz → +1.2x
+       8–12 kHz → +1.5x
+       12–16 kHz → +1.3x
+   - Compensates for microphone response and approximates canine audiogram.
+
+5. Pitch Shift (optional)
+   - Uses librosa.effects.pitch_shift().
+   - Default +2 semitones to accentuate high-frequency perception.
+
+6. Soft Limiter
+   - tanh-based soft clipping, threshold = 0.9.
+   - Prevents inter-sample overload and preserves overall dynamics.
+
+7. Real-Time Preview
+   - `--preview` mode via sounddevice.Stream().
+   - Processes live or file input through the same DSP chain.
+   - Low-latency output for evaluation and tuning.
+
+------------------------------------------------------------
+Pipeline Control
+------------------------------------------------------------
+All stages can be toggled or adjusted via command-line flags:
+
+--expand       Enable soft upward expansion of high-frequency content.
+--pitch        Enable pitch shift (default +2 semitones).
+--preview      Real-time preview mode (streams input through DSP chain).
+
+Example usage:
+
+# Process a WAV file with upward expansion
+python floppy_ears.py input.wav output.wav --expand
+
+# Process a WAV file with expansion and pitch shift
+python floppy_ears.py input.wav output.wav --expand --pitch
+
+# Real-time preview of live input with expansion
+python floppy_ears.py --preview --expand
+
+------------------------------------------------------------
+Notes
+------------------------------------------------------------
+- All stages use float64 precision for accurate spectral and temporal transformations.
+- Each stage is modular to allow selective activation (e.g., `--expand`, `--pitch`).
+- Processing order chosen to reduce cumulative artifacts while maximizing perceptual
+  fidelity to canine hearing within human-audible range.
