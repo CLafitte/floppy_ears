@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-floppy_ears.py v0.2
+floppy_ears.py v0.2.1-beta
 MVP: Transform a WAV file to approximate canine hearing perception.
 This version adds:
-- Exponential envelope soft upward expansion (optional)
-- Modular pipeline for clean integration
+- Real-time preview mode (--preview) using the same DSP chain
 Precision: float64 throughout
-Dependencies: numpy, scipy, soundfile, librosa (optional)
+Dependencies: numpy, scipy, soundfile, librosa, sounddevice
 """
 
 import numpy as np
@@ -15,6 +14,7 @@ from scipy.signal import firwin, lfilter, butter
 from scipy.fft import rfft, irfft
 import argparse
 import librosa
+import sounddevice as sd  # 🔹 added for preview mode
 
 # -------------------- Core Utilities -------------------- #
 
@@ -48,36 +48,29 @@ def amplitude_compensation(audio, sr):
     return irfft(spectrum * gain).astype(np.float64)
 
 def transient_enhancement(audio, sr, boost=0.5, time_constant_ms=10):
-    """Enhance transients using an exponential envelope follower.
-    This version replaces the moving-average convolution with a fast,
-    low-overhead smoothing that reacts quickly to onsets.
-    """
+    """Enhance transients using an exponential envelope follower."""
     coeff = np.exp(-1.0 / (time_constant_ms * 0.001 * sr))
     env = 0.0
     out = np.zeros_like(audio)
-    max_env = 1e-9  # prevent division by zero
-
+    max_env = 1e-9
     for i, x in enumerate(audio):
         env = coeff * env + (1 - coeff) * abs(x)
         max_env = max(max_env, env)
         out[i] = x * (1 + boost * env / max_env)
-
     return out.astype(np.float64)
 
-# -------------------- New Soft Upward Expansion -------------------- #
+# -------------------- Soft Upward Expansion -------------------- #
 
 def soft_expand(audio, sr, threshold_db=-40, ratio=0.5, attack_ms=10, release_ms=100):
     """Exponential envelope follower for efficient soft upward expansion."""
     eps = 1e-12
     attack_coeff = np.exp(-1.0 / (attack_ms * 0.001 * sr))
     release_coeff = np.exp(-1.0 / (release_ms * 0.001 * sr))
-
     env = 0.0
     out = np.zeros_like(audio, dtype=np.float64)
 
     for i, x in enumerate(audio):
         x_abs = abs(x)
-        # Exponential envelope
         if x_abs > env:
             env = attack_coeff * env + (1 - attack_coeff) * x_abs
         else:
@@ -106,39 +99,64 @@ def soft_limit(audio, threshold=0.9):
     """Prevent clipping gracefully."""
     return np.tanh(audio / threshold) * threshold
 
-# -------------------- Pipeline -------------------- #
+# -------------------- DSP Pipeline -------------------- #
+
+def dsp_chain(audio, sr, apply_pitch=False, apply_expand=False):
+    """Reusable DSP chain used by both file and real-time modes."""
+    audio = frequency_shaping(audio, sr)
+    audio = amplitude_compensation(audio)
+    if apply_expand:
+        audio = two_band_expand(audio, sr)
+    audio = transient_enhancement(audio, sr)
+    if apply_pitch:
+        audio = optional_pitch_shift(audio, sr)
+    audio = soft_limit(audio)
+    return audio
 
 def process_audio(input_file, output_file, apply_pitch=False, apply_expand=False):
     audio, sr = load_audio(input_file)
     print(f"Loaded '{input_file}' with {sr} Hz sample rate.")
-
-    audio = audio.astype(np.float64)
-    audio = frequency_shaping(audio, sr)
-    audio = amplitude_compensation(audio, sr)
-    
-    if apply_expand:
-        audio = two_band_expand(audio, sr)  # new exponential envelope smoothing expansion
-
-    audio = transient_enhancement(audio)
-    
-    if apply_pitch:
-        audio = optional_pitch_shift(audio, sr)
-
-    audio = soft_limit(audio)
-    save_audio(output_file, audio, sr)
+    processed = dsp_chain(audio, sr, apply_pitch, apply_expand)
+    save_audio(output_file, processed, sr)
     print(f"Saved transformed audio to '{output_file}'.")
+
+# -------------------- Real-Time Preview -------------------- #
+
+def preview_realtime(sr, apply_pitch=False, apply_expand=False):
+    """Low-latency real-time preview using sounddevice."""
+    print("[INFO] Starting real-time preview (Ctrl+C or Enter to stop)...")
+
+    def callback(indata, outdata, frames, time, status):
+        if status:
+            print(status, flush=True)
+        processed = dsp_chain(indata[:, 0], sr, apply_pitch, apply_expand)
+        outdata[:] = np.expand_dims(processed, axis=1)
+
+    with sd.Stream(channels=1, samplerate=sr, blocksize=1024,
+                   callback=callback, dtype='float64'):
+        input()  # waits until user presses Enter
+
+    print("[INFO] Preview stopped.")
 
 # -------------------- CLI -------------------- #
 
 def main():
-    parser = argparse.ArgumentParser(description="Floppy Ears - Transform WAV files to approximate dog hearing")
-    parser.add_argument("input_file", help="Path to input WAV file")
-    parser.add_argument("output_file", help="Path to output WAV file")
+    parser = argparse.ArgumentParser(description="Floppy Ears - Transform WAV files or preview in real-time")
+    parser.add_argument("input_file", nargs="?", help="Path to input WAV file (omit for --preview)")
+    parser.add_argument("output_file", nargs="?", help="Path to output WAV file")
     parser.add_argument("--pitch", action="store_true", help="Apply optional high-frequency pitch shift")
     parser.add_argument("--expand", action="store_true", help="Apply soft upward expansion (exponential envelope smoothing)")
+    parser.add_argument("--preview", action="store_true", help="Enable real-time playback preview of processed signal")
     args = parser.parse_args()
 
-    process_audio(args.input_file, args.output_file, apply_pitch=args.pitch, apply_expand=args.expand)
+    if args.preview:
+        # Default to 44.1 kHz if no file provided
+        sr = 44100
+        preview_realtime(sr, apply_pitch=args.pitch, apply_expand=args.expand)
+    else:
+        if not args.input_file or not args.output_file:
+            parser.error("input_file and output_file are required unless using --preview")
+        process_audio(args.input_file, args.output_file, apply_pitch=args.pitch, apply_expand=args.expand)
 
 if __name__ == "__main__":
     main()
