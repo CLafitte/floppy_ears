@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-floppy_ears.py v0.2.1-beta
+floppy_ears.py v0.2.2-beta
 MVP: Transform a WAV file to approximate canine hearing perception.
+
 This version adds:
 - Real-time preview mode (--preview) using the same DSP chain
+
 Precision: float64 throughout
 Dependencies: numpy, scipy, soundfile, librosa, sounddevice
 """
@@ -68,19 +70,16 @@ def soft_expand(audio, sr, threshold_db=-40, ratio=0.5, attack_ms=10, release_ms
     release_coeff = np.exp(-1.0 / (release_ms * 0.001 * sr))
     env = 0.0
     out = np.zeros_like(audio, dtype=np.float64)
-
     for i, x in enumerate(audio):
         x_abs = abs(x)
         if x_abs > env:
             env = attack_coeff * env + (1 - attack_coeff) * x_abs
         else:
             env = release_coeff * env + (1 - release_coeff) * x_abs
-
         env_db = 20 * np.log10(env + eps)
         gain_db = max(0.0, (threshold_db - env_db) * ratio)
         gain = 10 ** (gain_db / 20.0)
         out[i] = x * gain
-
     return out
 
 def two_band_expand(audio, sr, threshold_db=-40, ratio=0.5):
@@ -93,7 +92,7 @@ def two_band_expand(audio, sr, threshold_db=-40, ratio=0.5):
 
 def optional_pitch_shift(audio, sr, n_steps=2):
     """Optional: Shift pitch to emphasize high frequencies."""
-    return librosa.effects.pitch_shift(audio, sr, n_steps=n_steps).astype(np.float64)
+    return librosa.effects.pitch_shift(audio, sr=sr, n_steps=n_steps).astype(np.float64)
 
 def soft_limit(audio, threshold=0.9):
     """Prevent clipping gracefully."""
@@ -104,7 +103,7 @@ def soft_limit(audio, threshold=0.9):
 def dsp_chain(audio, sr, apply_pitch=False, apply_expand=False):
     """Reusable DSP chain used by both file and real-time modes."""
     audio = frequency_shaping(audio, sr)
-    audio = amplitude_compensation(audio)
+    audio = amplitude_compensation(audio, sr)
     if apply_expand:
         audio = two_band_expand(audio, sr)
     audio = transient_enhancement(audio, sr)
@@ -125,7 +124,6 @@ def process_audio(input_file, output_file, apply_pitch=False, apply_expand=False
 def preview_realtime(sr, apply_pitch=False, apply_expand=False):
     """Low-latency real-time preview using sounddevice."""
     print("[INFO] Starting real-time preview (Ctrl+C or Enter to stop)...")
-
     def callback(indata, outdata, frames, time, status):
         if status:
             print(status, flush=True)
@@ -133,9 +131,8 @@ def preview_realtime(sr, apply_pitch=False, apply_expand=False):
         outdata[:] = np.expand_dims(processed, axis=1)
 
     with sd.Stream(channels=1, samplerate=sr, blocksize=1024,
-                   callback=callback, dtype='float64'):
+                    callback=callback, dtype='float64'):
         input()  # waits until user presses Enter
-
     print("[INFO] Preview stopped.")
 
 # -------------------- CLI -------------------- #
